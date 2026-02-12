@@ -1,4 +1,4 @@
-mport streamlit as st
+import streamlit as st
 import datetime
 import io
 import os
@@ -19,6 +19,7 @@ product_db = {
     "LIGHT&JOY 당을 줄인 김천자두쨈": 12,
     "LIGHT&JOY 당을 줄인 논산딸기쨈": 12,
     "LIGHT&JOY 당을 줄인 청송사과쨈": 12,
+    "스위트앤사워소스(대만 맥도날드)": d120,
 }
 
 st.markdown(
