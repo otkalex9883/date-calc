@@ -1,6 +1,7 @@
 import streamlit as st
 import datetime
 import locale
+
 import streamlit.components.v1 as components
 
 try:
@@ -44,7 +45,6 @@ st.session_state.setdefault("auto_complete_show", False)
 st.session_state.setdefault("selected_product_name", "")
 st.session_state.setdefault("target_date_value", "")
 st.session_state.setdefault("date_input", today_kst)
-st.session_state.setdefault("picker_open", False)
 
 def reset_all():
     st.session_state.product_input = ""
@@ -52,11 +52,11 @@ def reset_all():
     st.session_state.auto_complete_show = False
     st.session_state.target_date_value = ""
     st.session_state.date_input = today_kst
-    st.session_state.picker_open = False
 
 def parse_shelf_life(value):
     if isinstance(value, int):
         return ("month", value)
+
     if isinstance(value, str):
         v = value.strip()
         if len(v) >= 2 and v[0].lower() == "d":
@@ -65,6 +65,7 @@ def parse_shelf_life(value):
                 return ("day", int(num))
         if v.isdigit():
             return ("month", int(v))
+
     raise ValueError(f"소비기한 형식 오류: {value!r} (예: 120 또는 'd120')")
 
 def is_leap_year(year: int) -> bool:
@@ -83,6 +84,7 @@ def get_target_date(start_date: datetime.date, months: int) -> datetime.date:
     new_year = y + (new_month - 1) // 12
     new_month = ((new_month - 1) % 12) + 1
     last_day = get_last_day(new_year, new_month)
+
     if d <= last_day:
         if d == 1:
             return datetime.date(new_year, new_month, 1)
@@ -94,7 +96,6 @@ def get_target_date_by_days(start_date: datetime.date, days: int) -> datetime.da
         raise ValueError(f"일 단위 소비기한은 1 이상이어야 합니다: d{days}")
     return start_date + datetime.timedelta(days=days - 1)
 
-# 제품명
 st.write("제품명을 입력하세요")
 
 def on_change_input():
@@ -125,25 +126,24 @@ if input_value.strip() and st.session_state.auto_complete_show:
     st.markdown('<div class="scroll-list">', unsafe_allow_html=True)
     for name in matching_products:
         col1, col2 = st.columns([8, 1])
-        col1.button(name, key=f"btn_{name}", on_click=select_product, args=(name,), use_container_width=True)
+        col1.button(
+            name,
+            key=f"btn_{name}",
+            on_click=select_product,
+            args=(name,),
+            use_container_width=True,
+        )
         col2.write("")
     st.markdown("</div>", unsafe_allow_html=True)
 elif not input_value.strip():
     st.session_state.selected_product_name = ""
     st.session_state.auto_complete_show = False
 
-# 제조일자
 st.write("제조일자")
-
-toggle_label = "달력 닫기" if st.session_state.picker_open else "달력 열기"
-st.button(
-    toggle_label,
-    key="toggle_picker",
-    on_click=lambda: st.session_state.__setitem__("picker_open", not st.session_state.picker_open),
-)
 
 qp = st.query_params
 qp_key = "mfg"
+
 if qp_key in qp:
     v = qp[qp_key]
     try:
@@ -152,32 +152,13 @@ if qp_key in qp:
         pass
 
 default_iso = st.session_state.date_input.isoformat()
-iframe_height = 650 if st.session_state.picker_open else 90
-inline_mode = "true" if st.session_state.picker_open else "false"
 
 picker_html = f"""
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
 <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
 <script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/ko.js"></script>
 
-<style>
-  body {{
-    margin: 0;
-    padding: 0;
-    background: transparent;
-    overflow: visible;
-  }}
-  #wrap {{
-    padding-top: 2px;
-    overflow: visible;
-  }}
-  .flatpickr-calendar {{
-    z-index: 999999 !important;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.35);
-  }}
-</style>
-
-<div id="wrap">
+<div id="odin_picker_wrap" style="position: relative;">
   <input id="odin_date" type="text" style="
       width: 160px;
       padding: 8px 10px;
@@ -190,46 +171,14 @@ picker_html = f"""
 
 <script>
 (function() {{
+  const wrap = document.getElementById("odin_picker_wrap");
   const input = document.getElementById("odin_date");
 
-  function fitHeight() {{
-    const cal = document.querySelector(".flatpickr-calendar");
-    const wrap = document.getElementById("wrap");
-    const extra = 20;
-
-    let h = wrap.getBoundingClientRect().height + extra;
-    if (cal) {{
-      h = wrap.getBoundingClientRect().height + cal.getBoundingClientRect().height + extra;
-    }}
-
-    document.body.style.height = Math.ceil(h) + "px";
-    document.documentElement.style.height = Math.ceil(h) + "px";
-  }}
-
-  const fp = flatpickr(input, {{
+  flatpickr(input, {{
     locale: "ko",
     dateFormat: "Y.m.d",
     defaultDate: "{default_iso}",
-    inline: {inline_mode},
-    disableMobile: true,
-    onReady: function() {{
-      setTimeout(fitHeight, 0);
-      setTimeout(fitHeight, 50);
-      setTimeout(fitHeight, 200);
-    }},
-    onOpen: function() {{
-      setTimeout(fitHeight, 0);
-      setTimeout(fitHeight, 50);
-      setTimeout(fitHeight, 200);
-    }},
-    onMonthChange: function() {{
-      setTimeout(fitHeight, 0);
-      setTimeout(fitHeight, 50);
-    }},
-    onYearChange: function() {{
-      setTimeout(fitHeight, 0);
-      setTimeout(fitHeight, 50);
-    }},
+    appendTo: wrap,
     onChange: function(selectedDates) {{
       const d = selectedDates[0];
       const yyyy = d.getFullYear();
@@ -243,16 +192,14 @@ picker_html = f"""
       window.parent.dispatchEvent(new Event("popstate"));
     }}
   }});
-
-  // initial
-  setTimeout(fitHeight, 0);
-  setTimeout(fitHeight, 50);
-  setTimeout(fitHeight, 200);
 }})();
 </script>
 """
 
-components.html(picker_html, height=iframe_height)
+# ✅ height를 충분히 크게: 달력 전체가 iframe 안에 들어오게
+components.html(picker_html, height=360)
+
+st.write(st.session_state.date_input.strftime("%Y.%m.%d"))
 
 col1, col2 = st.columns([1, 1])
 confirm = col1.button("확인", key="confirm", use_container_width=True)
