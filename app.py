@@ -28,23 +28,6 @@ st.markdown(
         padding:5px;
         margin-bottom:5px;
     }
-
-    /* ✅ 핵심: Streamlit 레이아웃이 iframe/달력을 잘라먹는 것 방지 */
-    div[data-testid="stAppViewContainer"],
-    div[data-testid="stMain"],
-    section.main,
-    div.block-container,
-    div[data-testid="stVerticalBlock"],
-    div[data-testid="stHorizontalBlock"],
-    div[data-testid="column"],
-    div[data-testid="stContainer"],
-    div.element-container {
-        overflow: visible !important;
-    }
-
-    iframe {
-        overflow: visible !important;
-    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -108,7 +91,9 @@ def get_target_date_by_days(start_date: datetime.date, days: int) -> datetime.da
         raise ValueError(f"일 단위 소비기한은 1 이상이어야 합니다: d{days}")
     return start_date + datetime.timedelta(days=days - 1)
 
-# 제품명
+# -----------------------------
+# Product input + autocomplete
+# -----------------------------
 st.write("제품명을 입력하세요")
 
 def on_change_input():
@@ -146,12 +131,17 @@ elif not input_value.strip():
     st.session_state.selected_product_name = ""
     st.session_state.auto_complete_show = False
 
-# 제조일자
+# -----------------------------
+# Date picker (inline inside expander)
+#   - open state is kept in query: cal=1
+#   - click on the input opens expander
+#   - selecting a date closes expander
+# -----------------------------
 st.write("제조일자")
 
 qp = st.query_params
 qp_key_date = "mfg"
-qp_key_open = "picker"
+qp_key_cal = "cal"
 
 if qp_key_date in qp:
     try:
@@ -160,16 +150,46 @@ if qp_key_date in qp:
         pass
 
 default_iso = st.session_state.date_input.isoformat()
-is_open = (qp_key_open in qp) and (str(qp[qp_key_open]) == "1")
+cal_open = (qp_key_cal in qp) and (str(qp[qp_key_cal]) == "1")
 
-# open 상태면 넉넉하게(클리핑은 CSS로 풀고, 높이도 충분히)
-iframe_height = 520 if is_open else 90
+# "입력칸"은 Streamlit 기본 위젯으로 두고, 클릭 시 달력(expander) 열기
+# (label 경고 방지 위해 label 제공 후 collapsed)
+clicked = st.text_input(
+    label="제조일자",
+    value=st.session_state.date_input.strftime("%Y.%m.%d"),
+    key="date_display",
+    label_visibility="collapsed",
+    placeholder="YYYY.MM.DD",
+)
 
-# ✅ 달력은 columns와 완전히 분리된 컨테이너에 둠(클리핑 최소화)
-picker_container = st.container()
+# 클릭 이벤트는 text_input에서 직접 못 받으니,
+# 아래 JS로 '포커스/클릭' 감지 → 쿼리 cal=1 세팅 → rerun → expander open
+open_cal_js = f"""
+<script>
+(function() {{
+  const parentDoc = window.parent.document;
+  // Streamlit text_input은 iframe 밖에 있으므로, 현재 페이지에서 가장 최근 input을 찾는게 어렵다.
+  // 대신 queryparam 기반으로 열림상태 유지하므로,
+  // 사용자가 제조일자 input을 클릭하면 cal=1이 되도록 "현재 포커스된 input"을 감지한다.
+  parentDoc.addEventListener("focusin", (e) => {{
+    const el = e.target;
+    if (!el) return;
+    if (el.tagName !== "INPUT") return;
+    // placeholder가 YYYY.MM.DD이면 제조일자 입력칸으로 간주
+    if ((el.getAttribute("placeholder") || "") !== "YYYY.MM.DD") return;
 
-with picker_container:
-    picker_html = f"""
+    const url = new URL(parentDoc.location.href);
+    url.searchParams.set("{qp_key_cal}", "1");
+    parentDoc.history.replaceState({{}}, "", url.toString());
+    window.parent.dispatchEvent(new Event("popstate"));
+  }}, true);
+}})();
+</script>
+"""
+components.html(open_cal_js, height=0)
+
+with st.expander("달력", expanded=cal_open):
+    cal_html = f"""
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
     <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
     <script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/ko.js"></script>
@@ -179,14 +199,9 @@ with picker_container:
         margin: 0;
         padding: 0;
         background: transparent;
-        overflow: visible;
-      }}
-      #wrap {{
-        overflow: visible;
       }}
       .flatpickr-calendar {{
         z-index: 999999 !important;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.35);
       }}
     </style>
 
@@ -199,11 +214,13 @@ with picker_container:
           background: #fff;
           color: #000;
         " />
+      <div id="inline_holder" style="margin-top: 10px;"></div>
     </div>
 
     <script>
     (function() {{
       const input = document.getElementById("odin_date");
+      const holder = document.getElementById("inline_holder");
 
       function setQuery(params) {{
         const url = new URL(window.parent.location.href);
@@ -216,17 +233,13 @@ with picker_container:
         window.parent.dispatchEvent(new Event("popstate"));
       }}
 
-      const fp = flatpickr(input, {{
+      flatpickr(input, {{
         locale: "ko",
         dateFormat: "Y.m.d",
         defaultDate: "{default_iso}",
+        inline: true,
+        appendTo: holder,
         disableMobile: true,
-        onOpen: function() {{
-          setQuery({{ "{qp_key_open}": "1" }});
-        }},
-        onClose: function() {{
-          setQuery({{ "{qp_key_open}": null }});
-        }},
         onChange: function(selectedDates) {{
           const d = selectedDates[0];
           const yyyy = d.getFullYear();
@@ -234,27 +247,29 @@ with picker_container:
           const dd = String(d.getDate()).padStart(2, "0");
           const iso = `${{yyyy}}-${{mm}}-${{dd}}`;
 
-          // 날짜 선택 시에도 open 유지(짤림 방지)
+          // 날짜 반영 + 달력(expander) 닫기
           setQuery({{
             "{qp_key_date}": iso,
-            "{qp_key_open}": "1"
+            "{qp_key_cal}": null
           }});
         }}
       }});
-
-      if ({str(is_open).lower()}) {{
-        setTimeout(() => fp.open(), 0);
-      }}
     }})();
     </script>
     """
-    components.html(picker_html, height=iframe_height)
+    # expander 안에서는 높이 크게 줘도 "항상 열려있을 때만" 공간을 먹음
+    components.html(cal_html, height=520)
 
-# 버튼(달력보다 '아래'에 위치시키되, 달력이 위를 덮어도 잘리지 않게 overflow를 풀어둠)
+# -----------------------------
+# Buttons
+# -----------------------------
 col1, col2 = st.columns([1, 1])
 confirm = col1.button("확인", key="confirm", use_container_width=True)
 reset = col2.button("새로고침", key="reset", on_click=reset_all, use_container_width=True)
 
+# -----------------------------
+# Confirm action
+# -----------------------------
 if confirm:
     pname = st.session_state.product_input.strip()
     dt = st.session_state.date_input
