@@ -28,23 +28,6 @@ st.markdown(
         padding:5px;
         margin-bottom:5px;
     }
-
-    /* ✅ 핵심: Streamlit 레이아웃이 iframe/달력을 잘라먹는 것 방지 */
-    div[data-testid="stAppViewContainer"],
-    div[data-testid="stMain"],
-    section.main,
-    div.block-container,
-    div[data-testid="stVerticalBlock"],
-    div[data-testid="stHorizontalBlock"],
-    div[data-testid="column"],
-    div[data-testid="stContainer"],
-    div.element-container {
-        overflow: visible !important;
-    }
-
-    iframe {
-        overflow: visible !important;
-    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -59,14 +42,17 @@ today_kst = datetime.datetime.now(KST).date()
 st.session_state.setdefault("product_input", "")
 st.session_state.setdefault("auto_complete_show", False)
 st.session_state.setdefault("selected_product_name", "")
+st.session_state.setdefault("target_date_value", "")
 st.session_state.setdefault("date_input", today_kst)
+st.session_state.setdefault("picker_open", False)
 
 def reset_all():
     st.session_state.product_input = ""
     st.session_state.selected_product_name = ""
     st.session_state.auto_complete_show = False
+    st.session_state.target_date_value = ""
     st.session_state.date_input = today_kst
-    st.query_params.clear()
+    st.session_state.picker_open = False
 
 def parse_shelf_life(value):
     if isinstance(value, int):
@@ -149,108 +135,125 @@ elif not input_value.strip():
 # 제조일자
 st.write("제조일자")
 
-qp = st.query_params
-qp_key_date = "mfg"
-qp_key_open = "picker"
+toggle_label = "달력 닫기" if st.session_state.picker_open else "달력 열기"
+st.button(
+    toggle_label,
+    key="toggle_picker",
+    on_click=lambda: st.session_state.__setitem__("picker_open", not st.session_state.picker_open),
+)
 
-if qp_key_date in qp:
+qp = st.query_params
+qp_key = "mfg"
+if qp_key in qp:
+    v = qp[qp_key]
     try:
-        st.session_state.date_input = datetime.date.fromisoformat(qp[qp_key_date])
+        st.session_state.date_input = datetime.date.fromisoformat(v)
     except Exception:
         pass
 
 default_iso = st.session_state.date_input.isoformat()
-is_open = (qp_key_open in qp) and (str(qp[qp_key_open]) == "1")
+iframe_height = 650 if st.session_state.picker_open else 90
+inline_mode = "true" if st.session_state.picker_open else "false"
 
-# open 상태면 넉넉하게(클리핑은 CSS로 풀고, 높이도 충분히)
-iframe_height = 520 if is_open else 90
+picker_html = f"""
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+<script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+<script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/ko.js"></script>
 
-# ✅ 달력은 columns와 완전히 분리된 컨테이너에 둠(클리핑 최소화)
-picker_container = st.container()
+<style>
+  body {{
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    overflow: visible;
+  }}
+  #wrap {{
+    padding-top: 2px;
+    overflow: visible;
+  }}
+  .flatpickr-calendar {{
+    z-index: 999999 !important;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+  }}
+</style>
 
-with picker_container:
-    picker_html = f"""
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
-    <script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/ko.js"></script>
+<div id="wrap">
+  <input id="odin_date" type="text" style="
+      width: 160px;
+      padding: 8px 10px;
+      border-radius: 6px;
+      border: 1px solid #666;
+      background: #fff;
+      color: #000;
+    " />
+</div>
 
-    <style>
-      body {{
-        margin: 0;
-        padding: 0;
-        background: transparent;
-        overflow: visible;
-      }}
-      #wrap {{
-        overflow: visible;
-      }}
-      .flatpickr-calendar {{
-        z-index: 999999 !important;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.35);
-      }}
-    </style>
+<script>
+(function() {{
+  const input = document.getElementById("odin_date");
 
-    <div id="wrap">
-      <input id="odin_date" type="text" style="
-          width: 160px;
-          padding: 8px 10px;
-          border-radius: 6px;
-          border: 1px solid #666;
-          background: #fff;
-          color: #000;
-        " />
-    </div>
+  function fitHeight() {{
+    const cal = document.querySelector(".flatpickr-calendar");
+    const wrap = document.getElementById("wrap");
+    const extra = 20;
 
-    <script>
-    (function() {{
-      const input = document.getElementById("odin_date");
+    let h = wrap.getBoundingClientRect().height + extra;
+    if (cal) {{
+      h = wrap.getBoundingClientRect().height + cal.getBoundingClientRect().height + extra;
+    }}
 
-      function setQuery(params) {{
-        const url = new URL(window.parent.location.href);
-        Object.keys(params).forEach((k) => {{
-          const v = params[k];
-          if (v === null || v === undefined) url.searchParams.delete(k);
-          else url.searchParams.set(k, v);
-        }});
-        window.parent.history.replaceState({{}}, "", url.toString());
-        window.parent.dispatchEvent(new Event("popstate"));
-      }}
+    document.body.style.height = Math.ceil(h) + "px";
+    document.documentElement.style.height = Math.ceil(h) + "px";
+  }}
 
-      const fp = flatpickr(input, {{
-        locale: "ko",
-        dateFormat: "Y.m.d",
-        defaultDate: "{default_iso}",
-        disableMobile: true,
-        onOpen: function() {{
-          setQuery({{ "{qp_key_open}": "1" }});
-        }},
-        onClose: function() {{
-          setQuery({{ "{qp_key_open}": null }});
-        }},
-        onChange: function(selectedDates) {{
-          const d = selectedDates[0];
-          const yyyy = d.getFullYear();
-          const mm = String(d.getMonth() + 1).padStart(2, "0");
-          const dd = String(d.getDate()).padStart(2, "0");
-          const iso = `${{yyyy}}-${{mm}}-${{dd}}`;
+  const fp = flatpickr(input, {{
+    locale: "ko",
+    dateFormat: "Y.m.d",
+    defaultDate: "{default_iso}",
+    inline: {inline_mode},
+    disableMobile: true,
+    onReady: function() {{
+      setTimeout(fitHeight, 0);
+      setTimeout(fitHeight, 50);
+      setTimeout(fitHeight, 200);
+    }},
+    onOpen: function() {{
+      setTimeout(fitHeight, 0);
+      setTimeout(fitHeight, 50);
+      setTimeout(fitHeight, 200);
+    }},
+    onMonthChange: function() {{
+      setTimeout(fitHeight, 0);
+      setTimeout(fitHeight, 50);
+    }},
+    onYearChange: function() {{
+      setTimeout(fitHeight, 0);
+      setTimeout(fitHeight, 50);
+    }},
+    onChange: function(selectedDates) {{
+      const d = selectedDates[0];
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const dd = String(d.getDate()).padStart(2, "0");
+      const iso = `${{yyyy}}-${{mm}}-${{dd}}`;
 
-          // 날짜 선택 시에도 open 유지(짤림 방지)
-          setQuery({{
-            "{qp_key_date}": iso,
-            "{qp_key_open}": "1"
-          }});
-        }}
-      }});
+      const url = new URL(window.parent.location.href);
+      url.searchParams.set("{qp_key}", iso);
+      window.parent.history.replaceState({{}}, "", url.toString());
+      window.parent.dispatchEvent(new Event("popstate"));
+    }}
+  }});
 
-      if ({str(is_open).lower()}) {{
-        setTimeout(() => fp.open(), 0);
-      }}
-    }})();
-    </script>
-    """
-    components.html(picker_html, height=iframe_height)
+  // initial
+  setTimeout(fitHeight, 0);
+  setTimeout(fitHeight, 50);
+  setTimeout(fitHeight, 200);
+}})();
+</script>
+"""
 
-# 버튼(달력보다 '아래'에 위치시키되, 달력이 위를 덮어도 잘리지 않게 overflow를 풀어둠)
+components.html(picker_html, height=iframe_height)
+
 col1, col2 = st.columns([1, 1])
 confirm = col1.button("확인", key="confirm", use_container_width=True)
 reset = col2.button("새로고침", key="reset", on_click=reset_all, use_container_width=True)
