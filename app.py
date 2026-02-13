@@ -43,23 +43,12 @@ st.session_state.setdefault("product_input", "")
 st.session_state.setdefault("auto_complete_show", False)
 st.session_state.setdefault("selected_product_name", "")
 st.session_state.setdefault("date_input", today_kst)
-st.session_state.setdefault("date_display_raw", today_kst.strftime("%Y.%m.%d"))
-
-def set_query_params(**kwargs):
-    qp = st.query_params
-    for k, v in kwargs.items():
-        if v is None:
-            if k in qp:
-                del qp[k]
-        else:
-            qp[k] = str(v)
 
 def reset_all():
     st.session_state.product_input = ""
     st.session_state.selected_product_name = ""
     st.session_state.auto_complete_show = False
     st.session_state.date_input = today_kst
-    st.session_state.date_display_raw = today_kst.strftime("%Y.%m.%d")
     st.query_params.clear()
 
 def parse_shelf_life(value):
@@ -102,35 +91,6 @@ def get_target_date_by_days(start_date: datetime.date, days: int) -> datetime.da
         raise ValueError(f"일 단위 소비기한은 1 이상이어야 합니다: d{days}")
     return start_date + datetime.timedelta(days=days - 1)
 
-def parse_date_text(s: str):
-    if not isinstance(s, str):
-        return None
-    t = s.strip()
-    if not t:
-        return None
-
-    # allow: YYYY.MM.DD, YYYY-MM-DD, YYYY/MM/DD, YYYYMMDD
-    for sep in (".", "-", "/"):
-        if sep in t:
-            parts = t.split(sep)
-            if len(parts) == 3 and all(p.isdigit() for p in parts):
-                try:
-                    y, m, d = map(int, parts)
-                    return datetime.date(y, m, d)
-                except Exception:
-                    return None
-
-    if len(t) == 8 and t.isdigit():
-        try:
-            y = int(t[0:4])
-            m = int(t[4:6])
-            d = int(t[6:8])
-            return datetime.date(y, m, d)
-        except Exception:
-            return None
-
-    return None
-
 # -----------------------------
 # Product input + autocomplete
 # -----------------------------
@@ -164,13 +124,7 @@ if input_value.strip() and st.session_state.auto_complete_show:
     st.markdown('<div class="scroll-list">', unsafe_allow_html=True)
     for name in matching_products:
         col1, col2 = st.columns([8, 1])
-        col1.button(
-            name,
-            key=f"btn_{name}",
-            on_click=select_product,
-            args=(name,),
-            use_container_width=True,
-        )
+        col1.button(name, key=f"btn_{name}", on_click=select_product, args=(name,), use_container_width=True)
         col2.write("")
     st.markdown("</div>", unsafe_allow_html=True)
 elif not input_value.strip():
@@ -178,65 +132,108 @@ elif not input_value.strip():
     st.session_state.auto_complete_show = False
 
 # -----------------------------
-# Date picker (two-way sync)
+# Date: single source of truth via query param mfg
+#   - Both input and calendar write to mfg
+#   - Python reads mfg and updates session_state.date_input
 # -----------------------------
 st.write("제조일자")
 
 qp_key_date = "mfg"
 qp_key_cal = "cal"
 
-# A) Apply date from query (calendar selection updates query -> rerun -> sync here)
 if qp_key_date in st.query_params:
     try:
-        qd = datetime.date.fromisoformat(st.query_params[qp_key_date])
-        if qd != st.session_state.date_input:
-            st.session_state.date_input = qd
-            st.session_state.date_display_raw = qd.strftime("%Y.%m.%d")
+        st.session_state.date_input = datetime.date.fromisoformat(st.query_params[qp_key_date])
     except Exception:
         pass
+else:
+    # initialize query once
+    st.query_params[qp_key_date] = st.session_state.date_input.isoformat()
 
 default_iso = st.session_state.date_input.isoformat()
 cal_open = (qp_key_cal in st.query_params) and (str(st.query_params[qp_key_cal]) == "1")
 
-# B) Text input change -> parse -> update session + query (sync to calendar)
-def on_change_date_text():
-    d = parse_date_text(st.session_state.date_display_raw)
-    if d is None:
-        return
-    st.session_state.date_input = d
-    st.session_state.date_display_raw = d.strftime("%Y.%m.%d")
-    set_query_params(mfg=d.isoformat(), cal="1")  # keep calendar open so user sees it moved
+# (1) Custom date INPUT (components) - fully controlled
+date_input_html = f"""
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+<script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+<script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/ko.js"></script>
 
-st.text_input(
-    label="제조일자",
-    value=st.session_state.date_display_raw,
-    key="date_display_raw",
-    label_visibility="collapsed",
-    placeholder="YYYY.MM.DD",
-    on_change=on_change_date_text,
-)
+<style>
+  body {{ margin:0; padding:0; background:transparent; }}
+  input {{
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid #33383f;
+    background: rgba(255,255,255,0.06);
+    color: white;
+    outline: none;
+    font-size: 16px;
+  }}
+  input:focus {{
+    border-color: #ff4b4b;
+  }}
+</style>
 
-# Focus input -> open calendar expander
-open_cal_js = f"""
+<input id="top_date" placeholder="YYYY.MM.DD" />
+
 <script>
 (function() {{
-  const parentDoc = window.parent.document;
-  parentDoc.addEventListener("focusin", (e) => {{
-    const el = e.target;
-    if (!el) return;
-    if (el.tagName !== "INPUT") return;
-    if ((el.getAttribute("placeholder") || "") !== "YYYY.MM.DD") return;
+  const input = document.getElementById("top_date");
 
-    const url = new URL(parentDoc.location.href);
-    url.searchParams.set("{qp_key_cal}", "1");
-    parentDoc.history.replaceState({{}}, "", url.toString());
+  function setQuery(params) {{
+    const url = new URL(window.parent.location.href);
+    Object.keys(params).forEach((k) => {{
+      const v = params[k];
+      if (v === null || v === undefined) url.searchParams.delete(k);
+      else url.searchParams.set(k, v);
+    }});
+    window.parent.history.replaceState({{}}, "", url.toString());
     window.parent.dispatchEvent(new Event("popstate"));
-  }}, true);
+  }}
+
+  // keep value synced from query on each rerender
+  input.value = "{st.session_state.date_input.strftime('%Y.%m.%d')}";
+
+  // open calendar expander when focused
+  input.addEventListener("focus", () => setQuery({{ "{qp_key_cal}": "1" }}));
+  input.addEventListener("click",  () => setQuery({{ "{qp_key_cal}": "1" }}));
+
+  // accept manual typing: on blur, parse and write to query
+  input.addEventListener("blur", () => {{
+    const raw = (input.value || "").trim();
+    if (!raw) return;
+
+    // normalize to YYYY-MM-DD
+    let iso = null;
+
+    // YYYY.MM.DD / YYYY-MM-DD / YYYY/MM/DD
+    const sepMatch = raw.match(/^(\d{{4}})[.\/-](\d{{1,2}})[.\/-](\d{{1,2}})$/);
+    if (sepMatch) {{
+      const y = sepMatch[1];
+      const m = String(parseInt(sepMatch[2], 10)).padStart(2, "0");
+      const d = String(parseInt(sepMatch[3], 10)).padStart(2, "0");
+      iso = `${{y}}-${{m}}-${{d}}`;
+    }}
+
+    // YYYYMMDD
+    const ymdMatch = raw.match(/^(\d{{4}})(\d{{2}})(\d{{2}})$/);
+    if (!iso && ymdMatch) {{
+      iso = `${{ymdMatch[1]}}-${{ymdMatch[2]}}-${{ymdMatch[3]}}`;
+    }}
+
+    if (iso) {{
+      setQuery({{ "{qp_key_date}": iso, "{qp_key_cal}": "1" }});
+    }}
+  }});
 }})();
 </script>
 """
-components.html(open_cal_js, height=0)
+components.html(date_input_html, height=56)
 
+# (2) Calendar (components) - inline calendar ONLY (remove useless white input)
 with st.expander("달력", expanded=cal_open):
     cal_html = f"""
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
@@ -244,38 +241,27 @@ with st.expander("달력", expanded=cal_open):
     <script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/ko.js"></script>
 
     <style>
-      body {{
-        margin: 0;
-        padding: 0;
-        background: transparent;
+      body {{ margin:0; padding:0; background:transparent; }}
+      #inline_holder {{ margin-top: 6px; }}
+      /* hide the useless white input entirely */
+      #hidden_input {{
+        position: absolute;
+        left: -9999px;
+        top: -9999px;
+        width: 1px;
+        height: 1px;
+        opacity: 0;
+        pointer-events: none;
       }}
-      #wrap {{
-        margin: 0;
-        padding: 0;
-      }}
-      #inline_holder {{
-        margin-top: 6px;
-      }}
-      .flatpickr-calendar {{
-        z-index: 999999 !important;
-      }}
+      .flatpickr-calendar {{ z-index: 999999 !important; }}
     </style>
 
-    <div id="wrap">
-      <input id="odin_date" type="text" style="
-          width: 160px;
-          padding: 8px 10px;
-          border-radius: 6px;
-          border: 1px solid #666;
-          background: #fff;
-          color: #000;
-        " />
-      <div id="inline_holder"></div>
-    </div>
+    <input id="hidden_input" />
+    <div id="inline_holder"></div>
 
     <script>
     (function() {{
-      const input = document.getElementById("odin_date");
+      const hiddenInput = document.getElementById("hidden_input");
       const holder = document.getElementById("inline_holder");
 
       function setQuery(params) {{
@@ -289,7 +275,7 @@ with st.expander("달력", expanded=cal_open):
         window.parent.dispatchEvent(new Event("popstate"));
       }}
 
-      flatpickr(input, {{
+      flatpickr(hiddenInput, {{
         locale: "ko",
         dateFormat: "Y.m.d",
         defaultDate: "{default_iso}",
@@ -303,7 +289,7 @@ with st.expander("달력", expanded=cal_open):
           const dd = String(d.getDate()).padStart(2, "0");
           const iso = `${{yyyy}}-${{mm}}-${{dd}}`;
 
-          // calendar -> query -> python sync -> text input sync
+          // calendar selection -> update query -> rerun -> top input rerenders with new value
           setQuery({{
             "{qp_key_date}": iso,
             "{qp_key_cal}": null
