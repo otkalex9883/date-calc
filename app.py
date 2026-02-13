@@ -1,57 +1,28 @@
 import streamlit as st
 import datetime
 import locale
-import inspect
+import json
 
-from streamlit_date_picker import date_picker
+import streamlit.components.v1 as components
 
-# ---------------------------
-# Locale (server-side formatting helper)
-# ---------------------------
 try:
     locale.setlocale(locale.LC_TIME, "ko_KR.UTF-8")
 except locale.Error:
     pass
 
-# ---------------------------
-# Data
-# ---------------------------
 product_db = {
-    "아삭 오이 피클": 6,                      # months
-    "스위트앤사워소스(대만 맥도날드)": "d120",  # days
+    "아삭 오이 피클": 6,
+    "스위트앤사워소스(대만 맥도날드)": "d120",
 }
 
-# ---------------------------
-# Styles (popup clipping/z-index fix)
-# ---------------------------
 st.markdown(
     """
     <style>
     .main {background-color: #fff;}
-    div.stTextInput > label, div.stDateInput > label {font-weight: bold;}
+    div.stTextInput > label {font-weight: bold;}
     input[data-testid="stTextInput"] {background-color: #eee;}
     .title {font-size:36px; font-weight:bold;}
 
-    /* ✅ Fix: date picker popup gets clipped/hidden (overflow/z-index issues) */
-    html, body { overflow: visible !important; }
-    div[data-testid="stAppViewContainer"],
-    section.main,
-    div.block-container,
-    div[data-testid="stVerticalBlock"],
-    div[data-testid="stHorizontalBlock"] {
-        overflow: visible !important;
-    }
-
-    /* Popover layers used by many datepickers */
-    .react-datepicker-popper,
-    .react-datepicker,
-    [role="dialog"],
-    [data-reach-dialog-overlay],
-    [data-reach-dialog-content] {
-        z-index: 999999 !important;
-    }
-
-    /* Autocomplete list */
     .scroll-list {
         max-height: 180px;
         overflow-y: auto;
@@ -64,67 +35,71 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# NOTE:
-# 기존에 사용하던 아래 CSS는 팝업형 컴포넌트(달력)와 충돌/잘림을 일으킬 수 있어 제거했습니다.
-# section.main > div {max-width: 390px; min-width: 390px;}
-
 st.markdown('<div class="title">일부인 계산기</div>', unsafe_allow_html=True)
 st.write("")
 
-# ---------------------------
-# KST today (stable default)
-# ---------------------------
 KST = datetime.timezone(datetime.timedelta(hours=9))
-today_kst_date = datetime.datetime.now(KST).date()
+today_kst = datetime.datetime.now(KST).date()
 
-# ---------------------------
-# Session state
-# ---------------------------
 st.session_state.setdefault("product_input", "")
 st.session_state.setdefault("auto_complete_show", False)
 st.session_state.setdefault("selected_product_name", "")
-st.session_state.setdefault("confirm_success", False)
 st.session_state.setdefault("target_date_value", "")
-st.session_state.setdefault("date_input", today_kst_date)  # store as date for calculations
+st.session_state.setdefault("date_input", today_kst)
 
 def reset_all():
     st.session_state.product_input = ""
     st.session_state.selected_product_name = ""
     st.session_state.auto_complete_show = False
-    st.session_state.confirm_success = False
     st.session_state.target_date_value = ""
-    st.session_state.date_input = today_kst_date
+    st.session_state.date_input = today_kst
 
-def safe_call_date_picker(**kwargs):
-    sig = inspect.signature(date_picker)
-    supported = set(sig.parameters.keys())
-    filtered = {k: v for k, v in kwargs.items() if k in supported}
-    return date_picker(**filtered)
+def parse_shelf_life(value):
+    if isinstance(value, int):
+        return ("month", value)
 
-def to_datetime_at_midnight(d: datetime.date) -> datetime.datetime:
-    return datetime.datetime.combine(d, datetime.time(0, 0, 0))
+    if isinstance(value, str):
+        v = value.strip()
+        if len(v) >= 2 and v[0].lower() == "d":
+            num = v[1:].strip()
+            if num.isdigit():
+                return ("day", int(num))
+        if v.isdigit():
+            return ("month", int(v))
 
-def normalize_picked_to_date(picked):
-    if isinstance(picked, datetime.datetime):
-        return picked.date()
-    if isinstance(picked, datetime.date):
-        return picked
-    if isinstance(picked, (int, float)):
-        try:
-            return datetime.datetime.fromtimestamp(picked).date()
-        except Exception:
-            return None
-    if isinstance(picked, str):
-        s = picked.strip()
-        try:
-            return datetime.date.fromisoformat(s[:10])
-        except Exception:
-            return None
-    return None
+    raise ValueError(f"소비기한 형식 오류: {value!r} (예: 120 또는 'd120')")
 
-# ---------------------------
+def is_leap_year(year: int) -> bool:
+    return (year % 4 == 0) and ((year % 100 != 0) or (year % 400 == 0))
+
+def get_last_day(year: int, month: int) -> int:
+    if month in (1, 3, 5, 7, 8, 10, 12):
+        return 31
+    if month in (4, 6, 9, 11):
+        return 30
+    return 29 if is_leap_year(year) else 28
+
+def get_target_date(start_date: datetime.date, months: int) -> datetime.date:
+    y, m, d = start_date.year, start_date.month, start_date.day
+    new_month = m + months
+    new_year = y + (new_month - 1) // 12
+    new_month = ((new_month - 1) % 12) + 1
+    last_day = get_last_day(new_year, new_month)
+
+    if d <= last_day:
+        if d == 1:
+            return datetime.date(new_year, new_month, 1)
+        return datetime.date(new_year, new_month, d - 1)
+    return datetime.date(new_year, new_month, last_day)
+
+def get_target_date_by_days(start_date: datetime.date, days: int) -> datetime.date:
+    if days <= 0:
+        raise ValueError(f"일 단위 소비기한은 1 이상이어야 합니다: d{days}")
+    return start_date + datetime.timedelta(days=days - 1)
+
+# -----------------------------
 # Product input + autocomplete
-# ---------------------------
+# -----------------------------
 st.write("제품명을 입력하세요")
 
 def on_change_input():
@@ -168,95 +143,88 @@ elif not input_value.strip():
     st.session_state.selected_product_name = ""
     st.session_state.auto_complete_show = False
 
-# ---------------------------
-# Date picker (Korean calendar)
-# ---------------------------
+# -----------------------------
+# Korean Date Picker (Flatpickr)
+# -----------------------------
 st.write("제조일자")
 
-current_date = st.session_state.date_input
-if not isinstance(current_date, datetime.date):
-    current_date = today_kst_date
-st.session_state.date_input = current_date
+# components -> Streamlit로 값을 돌려받는 방식:
+# query param을 통해서 전달 (page reload 없이도 동작하도록 설계)
+# - Streamlit은 query_params를 제공
+qp = st.query_params
+qp_key = "mfg"
 
-picked = safe_call_date_picker(
-    value=to_datetime_at_midnight(st.session_state.date_input),  # component expects datetime (timestamp())
-    locale="ko",
-    language="ko",
-)
+if qp_key in qp:
+    v = qp[qp_key]
+    try:
+        st.session_state.date_input = datetime.date.fromisoformat(v)
+    except Exception:
+        pass
 
-picked_date = normalize_picked_to_date(picked)
-if isinstance(picked_date, datetime.date):
-    st.session_state.date_input = picked_date
+default_iso = st.session_state.date_input.isoformat()
 
-# Keep showing selected date in app format
+picker_html = f"""
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+<script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+<script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/ko.js"></script>
+
+<div>
+  <input id="odin_date" type="text" style="
+      width: 160px;
+      padding: 8px 10px;
+      border-radius: 6px;
+      border: 1px solid #666;
+      background: #fff;
+      color: #000;
+    " />
+</div>
+
+<script>
+(function() {{
+  const input = document.getElementById("odin_date");
+  const fp = flatpickr(input, {{
+    locale: "ko",
+    dateFormat: "Y.m.d",
+    defaultDate: "{default_iso}",
+    onChange: function(selectedDates, dateStr, instance) {{
+      // selectedDates[0] is a Date object
+      const d = selectedDates[0];
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const dd = String(d.getDate()).padStart(2, "0");
+      const iso = `${{yyyy}}-${{mm}}-${{dd}}`;
+
+      const url = new URL(window.parent.location.href);
+      url.searchParams.set("{qp_key}", iso);
+      window.parent.history.replaceState({{}}, "", url.toString());
+      // Streamlit에 rerun 트리거
+      window.parent.dispatchEvent(new Event("popstate"));
+    }}
+  }});
+}})();
+</script>
+"""
+
+components.html(picker_html, height=70)
+
 st.write(st.session_state.date_input.strftime("%Y.%m.%d"))
 
-# ---------------------------
+# -----------------------------
 # Buttons
-# ---------------------------
+# -----------------------------
 col1, col2 = st.columns([1, 1])
 confirm = col1.button("확인", key="confirm", use_container_width=True)
 reset = col2.button("새로고침", key="reset", on_click=reset_all, use_container_width=True)
 
-# ---------------------------
-# Expiration rules
-# ---------------------------
-def is_leap_year(year: int) -> bool:
-    return (year % 4 == 0) and ((year % 100 != 0) or (year % 400 == 0))
-
-def get_last_day(year: int, month: int) -> int:
-    if month in (1, 3, 5, 7, 8, 10, 12):
-        return 31
-    if month in (4, 6, 9, 11):
-        return 30
-    return 29 if is_leap_year(year) else 28
-
-def get_target_date(start_date: datetime.date, months: int) -> datetime.date:
-    y, m, d = start_date.year, start_date.month, start_date.day
-    new_month = m + months
-    new_year = y + (new_month - 1) // 12
-    new_month = ((new_month - 1) % 12) + 1
-    last_day = get_last_day(new_year, new_month)
-
-    if d <= last_day:
-        if d == 1:
-            return datetime.date(new_year, new_month, 1)
-        return datetime.date(new_year, new_month, d - 1)
-
-    return datetime.date(new_year, new_month, last_day)
-
-def parse_shelf_life(value):
-    if isinstance(value, int):
-        return ("month", value)
-
-    if isinstance(value, str):
-        v = value.strip()
-        if len(v) >= 2 and v[0].lower() == "d":
-            num = v[1:].strip()
-            if num.isdigit():
-                return ("day", int(num))
-        if v.isdigit():
-            return ("month", int(v))
-
-    raise ValueError(f"소비기한 형식 오류: {value!r} (예: 120 또는 'd120')")
-
-def get_target_date_by_days(start_date: datetime.date, days: int) -> datetime.date:
-    if days <= 0:
-        raise ValueError(f"일 단위 소비기한은 1 이상이어야 합니다: d{days}")
-    # Naver-style inclusive count: start_date is day 1
-    return start_date + datetime.timedelta(days=days - 1)
-
-# ---------------------------
+# -----------------------------
 # Confirm action
-# ---------------------------
+# -----------------------------
 if confirm:
     pname = st.session_state.product_input.strip()
     dt = st.session_state.date_input
 
     if pname not in product_db:
         st.warning("제품명을 정확하게 입력하거나 목록에서 선택하세요.")
-    elif not isinstance(dt, datetime.date):
-        st.warning("제조일자를 입력하세요.")
     else:
         try:
             unit, amount = parse_shelf_life(product_db[pname])
