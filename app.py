@@ -44,6 +44,13 @@ st.session_state.setdefault("auto_complete_show", False)
 st.session_state.setdefault("selected_product_name", "")
 st.session_state.setdefault("date_input", today_kst)
 
+def reset_all():
+    st.session_state.product_input = ""
+    st.session_state.selected_product_name = ""
+    st.session_state.auto_complete_show = False
+    st.session_state.date_input = today_kst
+    st.query_params.clear()
+
 def parse_shelf_life(value):
     if isinstance(value, int):
         return ("month", value)
@@ -126,6 +133,8 @@ elif not input_value.strip():
 
 # -----------------------------
 # Date: single source of truth via query param mfg
+#   - Both input and calendar write to mfg
+#   - Python reads mfg and updates session_state.date_input
 # -----------------------------
 st.write("제조일자")
 
@@ -138,12 +147,13 @@ if qp_key_date in st.query_params:
     except Exception:
         pass
 else:
+    # initialize query once
     st.query_params[qp_key_date] = st.session_state.date_input.isoformat()
 
 default_iso = st.session_state.date_input.isoformat()
 cal_open = (qp_key_cal in st.query_params) and (str(st.query_params[qp_key_cal]) == "1")
 
-# (1) Top date input (components)
+# (1) Custom date INPUT (components) - fully controlled
 date_input_html = f"""
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
 <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
@@ -184,17 +194,22 @@ date_input_html = f"""
     window.parent.dispatchEvent(new Event("popstate"));
   }}
 
+  // keep value synced from query on each rerender
   input.value = "{st.session_state.date_input.strftime('%Y.%m.%d')}";
 
+  // open calendar expander when focused
   input.addEventListener("focus", () => setQuery({{ "{qp_key_cal}": "1" }}));
   input.addEventListener("click",  () => setQuery({{ "{qp_key_cal}": "1" }}));
 
+  // accept manual typing: on blur, parse and write to query
   input.addEventListener("blur", () => {{
     const raw = (input.value || "").trim();
     if (!raw) return;
 
+    // normalize to YYYY-MM-DD
     let iso = null;
 
+    // YYYY.MM.DD / YYYY-MM-DD / YYYY/MM/DD
     const sepMatch = raw.match(/^(\d{{4}})[.\/-](\d{{1,2}})[.\/-](\d{{1,2}})$/);
     if (sepMatch) {{
       const y = sepMatch[1];
@@ -203,6 +218,7 @@ date_input_html = f"""
       iso = `${{y}}-${{m}}-${{d}}`;
     }}
 
+    // YYYYMMDD
     const ymdMatch = raw.match(/^(\d{{4}})(\d{{2}})(\d{{2}})$/);
     if (!iso && ymdMatch) {{
       iso = `${{ymdMatch[1]}}-${{ymdMatch[2]}}-${{ymdMatch[3]}}`;
@@ -217,7 +233,7 @@ date_input_html = f"""
 """
 components.html(date_input_html, height=56)
 
-# (2) Calendar (components) - inline only
+# (2) Calendar (components) - inline calendar ONLY (remove useless white input)
 with st.expander("달력", expanded=cal_open):
     cal_html = f"""
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
@@ -227,6 +243,7 @@ with st.expander("달력", expanded=cal_open):
     <style>
       body {{ margin:0; padding:0; background:transparent; }}
       #inline_holder {{ margin-top: 6px; }}
+      /* hide the useless white input entirely */
       #hidden_input {{
         position: absolute;
         left: -9999px;
@@ -272,6 +289,7 @@ with st.expander("달력", expanded=cal_open):
           const dd = String(d.getDate()).padStart(2, "0");
           const iso = `${{yyyy}}-${{mm}}-${{dd}}`;
 
+          // calendar selection -> update query -> rerun -> top input rerenders with new value
           setQuery({{
             "{qp_key_date}": iso,
             "{qp_key_cal}": null
@@ -284,27 +302,35 @@ with st.expander("달력", expanded=cal_open):
     components.html(cal_html, height=360)
 
 # -----------------------------
-# Auto-calculate result (no buttons)
+# Buttons
 # -----------------------------
-pname = st.session_state.product_input.strip()
-dt = st.session_state.date_input
+col1, col2 = st.columns([1, 1])
+confirm = col1.button("확인", key="confirm", use_container_width=True)
+reset = col2.button("새로고침", key="reset", on_click=reset_all, use_container_width=True)
 
-if pname in product_db:
-    try:
-        unit, amount = parse_shelf_life(product_db[pname])
-        if unit == "day":
-            target_date = get_target_date_by_days(dt, amount)
-            st.success(f"목표일부인: {target_date.strftime('%Y.%m.%d')}", icon="✅")
-            st.write(f"제품명: {pname}")
-            st.write(f"제조일자: {dt.strftime('%Y.%m.%d')}")
-            st.write(f"소비기한(일): {amount}")
-        else:
-            target_date = get_target_date(dt, amount)
-            st.success(f"목표일부인: {target_date.strftime('%Y.%m.%d')}", icon="✅")
-            st.write(f"제품명: {pname}")
-            st.write(f"제조일자: {dt.strftime('%Y.%m.%d')}")
-            st.write(f"소비기한(개월): {amount}")
-    except Exception as e:
-        st.warning(str(e))
-elif pname:
-    st.info("제품명을 목록에서 선택하거나 정확히 입력하세요.")
+# -----------------------------
+# Confirm action
+# -----------------------------
+if confirm:
+    pname = st.session_state.product_input.strip()
+    dt = st.session_state.date_input
+
+    if pname not in product_db:
+        st.warning("제품명을 정확하게 입력하거나 목록에서 선택하세요.")
+    else:
+        try:
+            unit, amount = parse_shelf_life(product_db[pname])
+            if unit == "day":
+                target_date = get_target_date_by_days(dt, amount)
+                st.success(f"목표일부인: {target_date.strftime('%Y.%m.%d')}", icon="✅")
+                st.write(f"제품명: {pname}")
+                st.write(f"제조일자: {dt.strftime('%Y.%m.%d')}")
+                st.write(f"소비기한(일): {amount}")
+            else:
+                target_date = get_target_date(dt, amount)
+                st.success(f"목표일부인: {target_date.strftime('%Y.%m.%d')}", icon="✅")
+                st.write(f"제품명: {pname}")
+                st.write(f"제조일자: {dt.strftime('%Y.%m.%d')}")
+                st.write(f"소비기한(개월): {amount}")
+        except Exception as e:
+            st.warning(str(e))
