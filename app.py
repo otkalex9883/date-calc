@@ -40,14 +40,15 @@ st.markdown('<div class="title">일부인 계산기</div>', unsafe_allow_html=Tr
 st.write("")
 
 KST = datetime.timezone(datetime.timedelta(hours=9))
-today_kst = datetime.datetime.now(KST).date()
+today_kst_date = datetime.datetime.now(KST).date()
+today_kst_dt = datetime.datetime.combine(today_kst_date, datetime.time(0, 0, 0))
 
 st.session_state.setdefault("product_input", "")
 st.session_state.setdefault("auto_complete_show", False)
 st.session_state.setdefault("selected_product_name", "")
 st.session_state.setdefault("confirm_success", False)
 st.session_state.setdefault("target_date_value", "")
-st.session_state.setdefault("date_input", today_kst)
+st.session_state.setdefault("date_input", today_kst_date)  # 계산은 date로 유지
 
 def reset_all():
     st.session_state.product_input = ""
@@ -55,13 +56,34 @@ def reset_all():
     st.session_state.auto_complete_show = False
     st.session_state.confirm_success = False
     st.session_state.target_date_value = ""
-    st.session_state.date_input = today_kst
+    st.session_state.date_input = today_kst_date
 
 def safe_call_date_picker(**kwargs):
     sig = inspect.signature(date_picker)
     supported = set(sig.parameters.keys())
     filtered = {k: v for k, v in kwargs.items() if k in supported}
     return date_picker(**filtered)
+
+def to_datetime_at_midnight(d: datetime.date) -> datetime.datetime:
+    return datetime.datetime.combine(d, datetime.time(0, 0, 0))
+
+def normalize_picked_to_date(picked):
+    if isinstance(picked, datetime.datetime):
+        return picked.date()
+    if isinstance(picked, datetime.date):
+        return picked
+    if isinstance(picked, (int, float)):
+        try:
+            return datetime.datetime.fromtimestamp(picked).date()
+        except Exception:
+            return None
+    if isinstance(picked, str):
+        s = picked.strip()
+        try:
+            return datetime.date.fromisoformat(s[:10])
+        except Exception:
+            return None
+    return None
 
 st.write("제품명을 입력하세요")
 
@@ -122,20 +144,23 @@ elif not input_value.strip():
 
 st.write("제조일자")
 
+current_date = st.session_state.date_input
+if not isinstance(current_date, datetime.date):
+    current_date = today_kst_date
+st.session_state.date_input = current_date
+
 picked = safe_call_date_picker(
-    value=st.session_state.date_input,
-    default_value=st.session_state.date_input,
+    value=to_datetime_at_midnight(st.session_state.date_input),  # ✅ datetime으로 전달
     locale="ko",
     language="ko",
 )
 
-if isinstance(picked, datetime.date):
-    st.session_state.date_input = picked
-elif isinstance(picked, str):
-    try:
-        st.session_state.date_input = datetime.date.fromisoformat(picked)
-    except ValueError:
-        pass
+picked_date = normalize_picked_to_date(picked)
+if isinstance(picked_date, datetime.date):
+    st.session_state.date_input = picked_date
+
+# 입력칸에 현재 선택된 날짜를 확실히 표시(컴포넌트가 별도 입력 UI를 가질 수 있어 보조 표시)
+st.write(st.session_state.date_input.strftime("%Y.%m.%d"))
 
 col1, col2 = st.columns([1, 1])
 confirm = col1.button("확인", key="confirm", use_container_width=True)
