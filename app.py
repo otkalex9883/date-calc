@@ -51,7 +51,6 @@ def reset_all():
     st.session_state.auto_complete_show = False
     st.session_state.target_date_value = ""
     st.session_state.date_input = today_kst
-    # 쿼리도 초기화
     st.query_params.clear()
 
 def parse_shelf_life(value):
@@ -135,8 +134,7 @@ elif not input_value.strip():
     st.session_state.auto_complete_show = False
 
 # -----------------------------
-# Korean Date Picker (Flatpickr popup, no button, no clipping)
-#   - picker=1 in query keeps iframe tall during reruns
+# Korean Date Picker (inline expand/collapse, no clipping)
 # -----------------------------
 st.write("제조일자")
 
@@ -144,7 +142,6 @@ qp = st.query_params
 qp_key_date = "mfg"
 qp_key_open = "picker"
 
-# apply date from query
 if qp_key_date in qp:
     try:
         st.session_state.date_input = datetime.date.fromisoformat(qp[qp_key_date])
@@ -152,10 +149,10 @@ if qp_key_date in qp:
         pass
 
 default_iso = st.session_state.date_input.isoformat()
-is_open = qp_key_open in qp and str(qp[qp_key_open]) == "1"
+is_open = (qp_key_open in qp) and (str(qp[qp_key_open]) == "1")
 
-# when open -> tall iframe, else compact
-iframe_height = 520 if is_open else 90
+# 닫혔을 때는 거의 높이 안 먹게, 열렸을 때는 충분히 크게(짤림 방지)
+iframe_height = 900 if is_open else 80
 
 picker_html = f"""
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
@@ -174,7 +171,7 @@ picker_html = f"""
   }}
 </style>
 
-<div id="wrap" style="padding-top: 2px;">
+<div id="wrap">
   <input id="odin_date" type="text" style="
       width: 160px;
       padding: 8px 10px;
@@ -183,11 +180,13 @@ picker_html = f"""
       background: #fff;
       color: #000;
     " />
+  <div id="inline_holder" style="margin-top: 8px;"></div>
 </div>
 
 <script>
 (function() {{
   const input = document.getElementById("odin_date");
+  const holder = document.getElementById("inline_holder");
 
   function setQuery(params) {{
     const url = new URL(window.parent.location.href);
@@ -205,14 +204,21 @@ picker_html = f"""
     dateFormat: "Y.m.d",
     defaultDate: "{default_iso}",
     disableMobile: true,
-    onOpen: function() {{
-      // keep open across reruns
-      setQuery({{ "{qp_key_open}": "1" }});
+
+    // ✅ 열려있을 때만 inline으로(아니면 달력 DOM이 생기면서 높이/레이아웃 흔들림)
+    inline: {str(is_open).lower()},
+    appendTo: holder,
+
+    onReady: function() {{
+      // 입력 클릭으로 open 상태 진입
+      input.addEventListener("focus", () => {{
+        setQuery({{ "{qp_key_open}": "1" }});
+      }});
+      input.addEventListener("click", () => {{
+        setQuery({{ "{qp_key_open}": "1" }});
+      }});
     }},
-    onClose: function() {{
-      // close -> compact again
-      setQuery({{ "{qp_key_open}": null }});
-    }},
+
     onChange: function(selectedDates) {{
       const d = selectedDates[0];
       const yyyy = d.getFullYear();
@@ -220,18 +226,17 @@ picker_html = f"""
       const dd = String(d.getDate()).padStart(2, "0");
       const iso = `${{yyyy}}-${{mm}}-${{dd}}`;
 
-      // IMPORTANT: keep picker=1 so rerun doesn't shrink and clip
+      // 날짜 선택 후: 날짜 저장 + 달력 닫기(=picker 제거)
       setQuery({{
         "{qp_key_date}": iso,
-        "{qp_key_open}": "1"
+        "{qp_key_open}": null
       }});
     }}
   }});
 
-  // If already open state in query, open calendar immediately after rerun
-  const isOpen = {str(is_open).lower()};
-  if (isOpen) {{
-    setTimeout(() => fp.open(), 0);
+  // open 상태면, 렌더 직후 포커스 유지
+  if ({str(is_open).lower()}) {{
+    setTimeout(() => input.focus(), 0);
   }}
 }})();
 </script>
