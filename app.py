@@ -43,12 +43,23 @@ st.session_state.setdefault("product_input", "")
 st.session_state.setdefault("auto_complete_show", False)
 st.session_state.setdefault("selected_product_name", "")
 st.session_state.setdefault("date_input", today_kst)
+st.session_state.setdefault("date_display_raw", today_kst.strftime("%Y.%m.%d"))
+
+def set_query_params(**kwargs):
+    qp = st.query_params
+    for k, v in kwargs.items():
+        if v is None:
+            if k in qp:
+                del qp[k]
+        else:
+            qp[k] = str(v)
 
 def reset_all():
     st.session_state.product_input = ""
     st.session_state.selected_product_name = ""
     st.session_state.auto_complete_show = False
     st.session_state.date_input = today_kst
+    st.session_state.date_display_raw = today_kst.strftime("%Y.%m.%d")
     st.query_params.clear()
 
 def parse_shelf_life(value):
@@ -90,6 +101,35 @@ def get_target_date_by_days(start_date: datetime.date, days: int) -> datetime.da
     if days <= 0:
         raise ValueError(f"일 단위 소비기한은 1 이상이어야 합니다: d{days}")
     return start_date + datetime.timedelta(days=days - 1)
+
+def parse_date_text(s: str):
+    if not isinstance(s, str):
+        return None
+    t = s.strip()
+    if not t:
+        return None
+
+    # allow: YYYY.MM.DD, YYYY-MM-DD, YYYY/MM/DD, YYYYMMDD
+    for sep in (".", "-", "/"):
+        if sep in t:
+            parts = t.split(sep)
+            if len(parts) == 3 and all(p.isdigit() for p in parts):
+                try:
+                    y, m, d = map(int, parts)
+                    return datetime.date(y, m, d)
+                except Exception:
+                    return None
+
+    if len(t) == 8 and t.isdigit():
+        try:
+            y = int(t[0:4])
+            m = int(t[4:6])
+            d = int(t[6:8])
+            return datetime.date(y, m, d)
+        except Exception:
+            return None
+
+    return None
 
 # -----------------------------
 # Product input + autocomplete
@@ -138,31 +178,45 @@ elif not input_value.strip():
     st.session_state.auto_complete_show = False
 
 # -----------------------------
-# Date picker (inline inside expander) - size reduced
+# Date picker (two-way sync)
 # -----------------------------
 st.write("제조일자")
 
-qp = st.query_params
 qp_key_date = "mfg"
 qp_key_cal = "cal"
 
-if qp_key_date in qp:
+# A) Apply date from query (calendar selection updates query -> rerun -> sync here)
+if qp_key_date in st.query_params:
     try:
-        st.session_state.date_input = datetime.date.fromisoformat(qp[qp_key_date])
+        qd = datetime.date.fromisoformat(st.query_params[qp_key_date])
+        if qd != st.session_state.date_input:
+            st.session_state.date_input = qd
+            st.session_state.date_display_raw = qd.strftime("%Y.%m.%d")
     except Exception:
         pass
 
 default_iso = st.session_state.date_input.isoformat()
-cal_open = (qp_key_cal in qp) and (str(qp[qp_key_cal]) == "1")
+cal_open = (qp_key_cal in st.query_params) and (str(st.query_params[qp_key_cal]) == "1")
+
+# B) Text input change -> parse -> update session + query (sync to calendar)
+def on_change_date_text():
+    d = parse_date_text(st.session_state.date_display_raw)
+    if d is None:
+        return
+    st.session_state.date_input = d
+    st.session_state.date_display_raw = d.strftime("%Y.%m.%d")
+    set_query_params(mfg=d.isoformat(), cal="1")  # keep calendar open so user sees it moved
 
 st.text_input(
     label="제조일자",
-    value=st.session_state.date_input.strftime("%Y.%m.%d"),
-    key="date_display",
+    value=st.session_state.date_display_raw,
+    key="date_display_raw",
     label_visibility="collapsed",
     placeholder="YYYY.MM.DD",
+    on_change=on_change_date_text,
 )
 
+# Focus input -> open calendar expander
 open_cal_js = f"""
 <script>
 (function() {{
@@ -249,6 +303,7 @@ with st.expander("달력", expanded=cal_open):
           const dd = String(d.getDate()).padStart(2, "0");
           const iso = `${{yyyy}}-${{mm}}-${{dd}}`;
 
+          // calendar -> query -> python sync -> text input sync
           setQuery({{
             "{qp_key_date}": iso,
             "{qp_key_cal}": null
@@ -258,7 +313,6 @@ with st.expander("달력", expanded=cal_open):
     }})();
     </script>
     """
-    # ✅ 여기만 줄이면 화면이 깔끔해짐
     components.html(cal_html, height=360)
 
 # -----------------------------
