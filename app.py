@@ -44,7 +44,6 @@ st.session_state.setdefault("auto_complete_show", False)
 st.session_state.setdefault("selected_product_name", "")
 st.session_state.setdefault("target_date_value", "")
 st.session_state.setdefault("date_input", today_kst)
-st.session_state.setdefault("picker_open", False)
 
 def reset_all():
     st.session_state.product_input = ""
@@ -52,7 +51,8 @@ def reset_all():
     st.session_state.auto_complete_show = False
     st.session_state.target_date_value = ""
     st.session_state.date_input = today_kst
-    st.session_state.picker_open = False
+    # 쿼리도 초기화
+    st.query_params.clear()
 
 def parse_shelf_life(value):
     if isinstance(value, int):
@@ -94,7 +94,9 @@ def get_target_date_by_days(start_date: datetime.date, days: int) -> datetime.da
         raise ValueError(f"일 단위 소비기한은 1 이상이어야 합니다: d{days}")
     return start_date + datetime.timedelta(days=days - 1)
 
-# 제품명
+# -----------------------------
+# Product input + autocomplete
+# -----------------------------
 st.write("제품명을 입력하세요")
 
 def on_change_input():
@@ -132,28 +134,28 @@ elif not input_value.strip():
     st.session_state.selected_product_name = ""
     st.session_state.auto_complete_show = False
 
-# 제조일자
+# -----------------------------
+# Korean Date Picker (Flatpickr popup, no button, no clipping)
+#   - picker=1 in query keeps iframe tall during reruns
+# -----------------------------
 st.write("제조일자")
 
-toggle_label = "달력 닫기" if st.session_state.picker_open else "달력 열기"
-st.button(
-    toggle_label,
-    key="toggle_picker",
-    on_click=lambda: st.session_state.__setitem__("picker_open", not st.session_state.picker_open),
-)
-
 qp = st.query_params
-qp_key = "mfg"
-if qp_key in qp:
-    v = qp[qp_key]
+qp_key_date = "mfg"
+qp_key_open = "picker"
+
+# apply date from query
+if qp_key_date in qp:
     try:
-        st.session_state.date_input = datetime.date.fromisoformat(v)
+        st.session_state.date_input = datetime.date.fromisoformat(qp[qp_key_date])
     except Exception:
         pass
 
 default_iso = st.session_state.date_input.isoformat()
-iframe_height = 650 if st.session_state.picker_open else 90
-inline_mode = "true" if st.session_state.picker_open else "false"
+is_open = qp_key_open in qp and str(qp[qp_key_open]) == "1"
+
+# when open -> tall iframe, else compact
+iframe_height = 520 if is_open else 90
 
 picker_html = f"""
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
@@ -165,11 +167,6 @@ picker_html = f"""
     margin: 0;
     padding: 0;
     background: transparent;
-    overflow: visible;
-  }}
-  #wrap {{
-    padding-top: 2px;
-    overflow: visible;
   }}
   .flatpickr-calendar {{
     z-index: 999999 !important;
@@ -177,7 +174,7 @@ picker_html = f"""
   }}
 </style>
 
-<div id="wrap">
+<div id="wrap" style="padding-top: 2px;">
   <input id="odin_date" type="text" style="
       width: 160px;
       padding: 8px 10px;
@@ -192,43 +189,29 @@ picker_html = f"""
 (function() {{
   const input = document.getElementById("odin_date");
 
-  function fitHeight() {{
-    const cal = document.querySelector(".flatpickr-calendar");
-    const wrap = document.getElementById("wrap");
-    const extra = 20;
-
-    let h = wrap.getBoundingClientRect().height + extra;
-    if (cal) {{
-      h = wrap.getBoundingClientRect().height + cal.getBoundingClientRect().height + extra;
-    }}
-
-    document.body.style.height = Math.ceil(h) + "px";
-    document.documentElement.style.height = Math.ceil(h) + "px";
+  function setQuery(params) {{
+    const url = new URL(window.parent.location.href);
+    Object.keys(params).forEach((k) => {{
+      const v = params[k];
+      if (v === null || v === undefined) url.searchParams.delete(k);
+      else url.searchParams.set(k, v);
+    }});
+    window.parent.history.replaceState({{}}, "", url.toString());
+    window.parent.dispatchEvent(new Event("popstate"));
   }}
 
   const fp = flatpickr(input, {{
     locale: "ko",
     dateFormat: "Y.m.d",
     defaultDate: "{default_iso}",
-    inline: {inline_mode},
     disableMobile: true,
-    onReady: function() {{
-      setTimeout(fitHeight, 0);
-      setTimeout(fitHeight, 50);
-      setTimeout(fitHeight, 200);
-    }},
     onOpen: function() {{
-      setTimeout(fitHeight, 0);
-      setTimeout(fitHeight, 50);
-      setTimeout(fitHeight, 200);
+      // keep open across reruns
+      setQuery({{ "{qp_key_open}": "1" }});
     }},
-    onMonthChange: function() {{
-      setTimeout(fitHeight, 0);
-      setTimeout(fitHeight, 50);
-    }},
-    onYearChange: function() {{
-      setTimeout(fitHeight, 0);
-      setTimeout(fitHeight, 50);
+    onClose: function() {{
+      // close -> compact again
+      setQuery({{ "{qp_key_open}": null }});
     }},
     onChange: function(selectedDates) {{
       const d = selectedDates[0];
@@ -237,27 +220,35 @@ picker_html = f"""
       const dd = String(d.getDate()).padStart(2, "0");
       const iso = `${{yyyy}}-${{mm}}-${{dd}}`;
 
-      const url = new URL(window.parent.location.href);
-      url.searchParams.set("{qp_key}", iso);
-      window.parent.history.replaceState({{}}, "", url.toString());
-      window.parent.dispatchEvent(new Event("popstate"));
+      // IMPORTANT: keep picker=1 so rerun doesn't shrink and clip
+      setQuery({{
+        "{qp_key_date}": iso,
+        "{qp_key_open}": "1"
+      }});
     }}
   }});
 
-  // initial
-  setTimeout(fitHeight, 0);
-  setTimeout(fitHeight, 50);
-  setTimeout(fitHeight, 200);
+  // If already open state in query, open calendar immediately after rerun
+  const isOpen = {str(is_open).lower()};
+  if (isOpen) {{
+    setTimeout(() => fp.open(), 0);
+  }}
 }})();
 </script>
 """
 
 components.html(picker_html, height=iframe_height)
 
+# -----------------------------
+# Buttons
+# -----------------------------
 col1, col2 = st.columns([1, 1])
 confirm = col1.button("확인", key="confirm", use_container_width=True)
 reset = col2.button("새로고침", key="reset", on_click=reset_all, use_container_width=True)
 
+# -----------------------------
+# Confirm action
+# -----------------------------
 if confirm:
     pname = st.session_state.product_input.strip()
     dt = st.session_state.date_input
