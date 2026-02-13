@@ -1,7 +1,6 @@
 import streamlit as st
 import datetime
 import locale
-import json
 
 import streamlit.components.v1 as components
 
@@ -97,9 +96,6 @@ def get_target_date_by_days(start_date: datetime.date, days: int) -> datetime.da
         raise ValueError(f"일 단위 소비기한은 1 이상이어야 합니다: d{days}")
     return start_date + datetime.timedelta(days=days - 1)
 
-# -----------------------------
-# Product input + autocomplete
-# -----------------------------
 st.write("제품명을 입력하세요")
 
 def on_change_input():
@@ -143,14 +139,8 @@ elif not input_value.strip():
     st.session_state.selected_product_name = ""
     st.session_state.auto_complete_show = False
 
-# -----------------------------
-# Korean Date Picker (Flatpickr)
-# -----------------------------
 st.write("제조일자")
 
-# components -> Streamlit로 값을 돌려받는 방식:
-# query param을 통해서 전달 (page reload 없이도 동작하도록 설계)
-# - Streamlit은 query_params를 제공
 qp = st.query_params
 qp_key = "mfg"
 
@@ -168,7 +158,7 @@ picker_html = f"""
 <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
 <script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/ko.js"></script>
 
-<div>
+<div id="odin_picker_wrap" style="position: relative;">
   <input id="odin_date" type="text" style="
       width: 160px;
       padding: 8px 10px;
@@ -181,13 +171,15 @@ picker_html = f"""
 
 <script>
 (function() {{
+  const wrap = document.getElementById("odin_picker_wrap");
   const input = document.getElementById("odin_date");
-  const fp = flatpickr(input, {{
+
+  flatpickr(input, {{
     locale: "ko",
     dateFormat: "Y.m.d",
     defaultDate: "{default_iso}",
-    onChange: function(selectedDates, dateStr, instance) {{
-      // selectedDates[0] is a Date object
+    appendTo: wrap,
+    onChange: function(selectedDates) {{
       const d = selectedDates[0];
       const yyyy = d.getFullYear();
       const mm = String(d.getMonth() + 1).padStart(2, "0");
@@ -197,7 +189,6 @@ picker_html = f"""
       const url = new URL(window.parent.location.href);
       url.searchParams.set("{qp_key}", iso);
       window.parent.history.replaceState({{}}, "", url.toString());
-      // Streamlit에 rerun 트리거
       window.parent.dispatchEvent(new Event("popstate"));
     }}
   }});
@@ -205,20 +196,15 @@ picker_html = f"""
 </script>
 """
 
-components.html(picker_html, height=70)
+# ✅ height를 충분히 크게: 달력 전체가 iframe 안에 들어오게
+components.html(picker_html, height=360)
 
 st.write(st.session_state.date_input.strftime("%Y.%m.%d"))
 
-# -----------------------------
-# Buttons
-# -----------------------------
 col1, col2 = st.columns([1, 1])
 confirm = col1.button("확인", key="confirm", use_container_width=True)
 reset = col2.button("새로고침", key="reset", on_click=reset_all, use_container_width=True)
 
-# -----------------------------
-# Confirm action
-# -----------------------------
 if confirm:
     pname = st.session_state.product_input.strip()
     dt = st.session_state.date_input
