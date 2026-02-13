@@ -124,7 +124,13 @@ if input_value.strip() and st.session_state.auto_complete_show:
     st.markdown('<div class="scroll-list">', unsafe_allow_html=True)
     for name in matching_products:
         col1, col2 = st.columns([8, 1])
-        col1.button(name, key=f"btn_{name}", on_click=select_product, args=(name,), use_container_width=True)
+        col1.button(
+            name,
+            key=f"btn_{name}",
+            on_click=select_product,
+            args=(name,),
+            use_container_width=True,
+        )
         col2.write("")
     st.markdown("</div>", unsafe_allow_html=True)
 elif not input_value.strip():
@@ -132,10 +138,7 @@ elif not input_value.strip():
     st.session_state.auto_complete_show = False
 
 # -----------------------------
-# Date picker (inline inside expander)
-#   - open state is kept in query: cal=1
-#   - click on the input opens expander
-#   - selecting a date closes expander
+# Date picker (inline inside expander) - size reduced
 # -----------------------------
 st.write("제조일자")
 
@@ -152,9 +155,7 @@ if qp_key_date in qp:
 default_iso = st.session_state.date_input.isoformat()
 cal_open = (qp_key_cal in qp) and (str(qp[qp_key_cal]) == "1")
 
-# "입력칸"은 Streamlit 기본 위젯으로 두고, 클릭 시 달력(expander) 열기
-# (label 경고 방지 위해 label 제공 후 collapsed)
-clicked = st.text_input(
+st.text_input(
     label="제조일자",
     value=st.session_state.date_input.strftime("%Y.%m.%d"),
     key="date_display",
@@ -162,20 +163,14 @@ clicked = st.text_input(
     placeholder="YYYY.MM.DD",
 )
 
-# 클릭 이벤트는 text_input에서 직접 못 받으니,
-# 아래 JS로 '포커스/클릭' 감지 → 쿼리 cal=1 세팅 → rerun → expander open
 open_cal_js = f"""
 <script>
 (function() {{
   const parentDoc = window.parent.document;
-  // Streamlit text_input은 iframe 밖에 있으므로, 현재 페이지에서 가장 최근 input을 찾는게 어렵다.
-  // 대신 queryparam 기반으로 열림상태 유지하므로,
-  // 사용자가 제조일자 input을 클릭하면 cal=1이 되도록 "현재 포커스된 input"을 감지한다.
   parentDoc.addEventListener("focusin", (e) => {{
     const el = e.target;
     if (!el) return;
     if (el.tagName !== "INPUT") return;
-    // placeholder가 YYYY.MM.DD이면 제조일자 입력칸으로 간주
     if ((el.getAttribute("placeholder") || "") !== "YYYY.MM.DD") return;
 
     const url = new URL(parentDoc.location.href);
@@ -200,6 +195,13 @@ with st.expander("달력", expanded=cal_open):
         padding: 0;
         background: transparent;
       }}
+      #wrap {{
+        margin: 0;
+        padding: 0;
+      }}
+      #inline_holder {{
+        margin-top: 6px;
+      }}
       .flatpickr-calendar {{
         z-index: 999999 !important;
       }}
@@ -214,7 +216,7 @@ with st.expander("달력", expanded=cal_open):
           background: #fff;
           color: #000;
         " />
-      <div id="inline_holder" style="margin-top: 10px;"></div>
+      <div id="inline_holder"></div>
     </div>
 
     <script>
@@ -247,7 +249,6 @@ with st.expander("달력", expanded=cal_open):
           const dd = String(d.getDate()).padStart(2, "0");
           const iso = `${{yyyy}}-${{mm}}-${{dd}}`;
 
-          // 날짜 반영 + 달력(expander) 닫기
           setQuery({{
             "{qp_key_date}": iso,
             "{qp_key_cal}": null
@@ -257,8 +258,8 @@ with st.expander("달력", expanded=cal_open):
     }})();
     </script>
     """
-    # expander 안에서는 높이 크게 줘도 "항상 열려있을 때만" 공간을 먹음
-    components.html(cal_html, height=520)
+    # ✅ 여기만 줄이면 화면이 깔끔해짐
+    components.html(cal_html, height=360)
 
 # -----------------------------
 # Buttons
