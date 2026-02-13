@@ -1,7 +1,6 @@
 import streamlit as st
 import datetime
 import locale
-
 import streamlit.components.v1 as components
 
 try:
@@ -96,6 +95,9 @@ def get_target_date_by_days(start_date: datetime.date, days: int) -> datetime.da
         raise ValueError(f"일 단위 소비기한은 1 이상이어야 합니다: d{days}")
     return start_date + datetime.timedelta(days=days - 1)
 
+# -----------------------------
+# Product input + autocomplete
+# -----------------------------
 st.write("제품명을 입력하세요")
 
 def on_change_input():
@@ -139,6 +141,9 @@ elif not input_value.strip():
     st.session_state.selected_product_name = ""
     st.session_state.auto_complete_show = False
 
+# -----------------------------
+# Korean Date Picker (Flatpickr, no blank space)
+# -----------------------------
 st.write("제조일자")
 
 qp = st.query_params
@@ -158,7 +163,14 @@ picker_html = f"""
 <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
 <script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/ko.js"></script>
 
-<div id="odin_picker_wrap" style="position: relative;">
+<style>
+  /* Make popup always on top in parent document */
+  .flatpickr-calendar {{
+    z-index: 2147483647 !important;
+  }}
+</style>
+
+<div>
   <input id="odin_date" type="text" style="
       width: 160px;
       padding: 8px 10px;
@@ -171,14 +183,41 @@ picker_html = f"""
 
 <script>
 (function() {{
-  const wrap = document.getElementById("odin_picker_wrap");
   const input = document.getElementById("odin_date");
 
-  flatpickr(input, {{
+  // Create a container in parent document to host the calendar popup
+  const parentDoc = window.parent.document;
+  let host = parentDoc.getElementById("odin-flatpickr-host");
+  if (!host) {{
+    host = parentDoc.createElement("div");
+    host.id = "odin-flatpickr-host";
+    host.style.position = "fixed";
+    host.style.left = "0";
+    host.style.top = "0";
+    host.style.width = "0";
+    host.style.height = "0";
+    host.style.zIndex = "2147483647";
+    parentDoc.body.appendChild(host);
+  }}
+
+  const fp = flatpickr(input, {{
     locale: "ko",
     dateFormat: "Y.m.d",
     defaultDate: "{default_iso}",
-    appendTo: wrap,
+    appendTo: host,
+    disableMobile: true,
+    onOpen: function(selectedDates, dateStr, instance) {{
+      // Position the calendar under the input (in parent viewport coordinates)
+      const rect = window.frameElement.getBoundingClientRect();
+      const inputRect = input.getBoundingClientRect();
+
+      const left = rect.left + inputRect.left;
+      const top = rect.top + inputRect.bottom + 6;
+
+      instance.calendarContainer.style.position = "fixed";
+      instance.calendarContainer.style.left = left + "px";
+      instance.calendarContainer.style.top = top + "px";
+    }},
     onChange: function(selectedDates) {{
       const d = selectedDates[0];
       const yyyy = d.getFullYear();
@@ -196,15 +235,21 @@ picker_html = f"""
 </script>
 """
 
-# ✅ height를 충분히 크게: 달력 전체가 iframe 안에 들어오게
-components.html(picker_html, height=360)
+# ✅ 높이를 입력칸만큼만: 빈 공간 제거
+components.html(picker_html, height=80)
 
 st.write(st.session_state.date_input.strftime("%Y.%m.%d"))
 
+# -----------------------------
+# Buttons
+# -----------------------------
 col1, col2 = st.columns([1, 1])
 confirm = col1.button("확인", key="confirm", use_container_width=True)
 reset = col2.button("새로고침", key="reset", on_click=reset_all, use_container_width=True)
 
+# -----------------------------
+# Confirm action
+# -----------------------------
 if confirm:
     pname = st.session_state.product_input.strip()
     dt = st.session_state.date_input
