@@ -44,13 +44,6 @@ st.session_state.setdefault("auto_complete_show", False)
 st.session_state.setdefault("selected_product_name", "")
 st.session_state.setdefault("date_input", today_kst)
 
-def reset_all():
-    st.session_state.product_input = ""
-    st.session_state.selected_product_name = ""
-    st.session_state.auto_complete_show = False
-    st.session_state.date_input = today_kst
-    st.query_params.clear()
-
 def parse_shelf_life(value):
     if isinstance(value, int):
         return ("month", value)
@@ -302,11 +295,9 @@ with st.expander("달력", expanded=cal_open):
     components.html(cal_html, height=360)
 
 # -----------------------------
-# Buttons
+# Buttons (새로고침 제거, 확인 버튼 단독 전체폭)
 # -----------------------------
-col1, col2 = st.columns([1, 1])
-confirm = col1.button("확인", key="confirm", use_container_width=True)
-reset = col2.button("새로고침", key="reset", on_click=reset_all, use_container_width=True)
+confirm = st.button("확인", key="confirm", use_container_width=True)
 
 # -----------------------------
 # Confirm action
